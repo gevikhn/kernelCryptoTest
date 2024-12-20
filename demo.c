@@ -105,5 +105,66 @@ int main(void) {
     close(opfd);
     close(tfmfd);
 
+    //解密
+    tfmfd = socket(AF_ALG, SOCK_SEQPACKET, 0);
+    if (tfmfd < 0) {
+        perror("socket");
+        return -1;
+    }
+
+    if (bind(tfmfd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        perror("bind");
+        close(tfmfd);
+        return -1;
+    }
+
+    if (setsockopt(tfmfd, SOL_ALG, ALG_SET_KEY, key, AES_KEY_SIZE) < 0) {
+        perror("setsockopt");
+        close(tfmfd);
+        return -1;
+    }
+
+    opfd = accept(tfmfd, NULL, 0);
+    if (opfd < 0) {
+        perror("accept");
+        close(tfmfd);
+        return -1;
+    }
+
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof(cbuf);
+
+    cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_ALG;
+    cmsg->cmsg_type = ALG_SET_OP;
+    cmsg->cmsg_len = CMSG_LEN(4);
+    *(__u32 *)CMSG_DATA(cmsg) = ALG_OP_DECRYPT;
+
+    iov.iov_base = ciphertext;
+    iov.iov_len = BLOCK_SIZE;
+
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    if (sendmsg(opfd, &msg, 0) < 0) {
+        perror("sendmsg");
+        close(opfd);
+        close(tfmfd);
+        return -1;
+    }
+
+    if (read(opfd, plaintext, BLOCK_SIZE) < 0) {
+        perror("read");
+        close(opfd);
+        close(tfmfd);
+        return -1;
+    }
+
+    print_hex("Plaintext", plaintext, BLOCK_SIZE);
+
+    close(opfd);
+    close(tfmfd);
+
+
     return 0;
 }
