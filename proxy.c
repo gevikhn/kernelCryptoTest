@@ -25,6 +25,9 @@
 std::string target_ip = "127.0.0.1";  // 默认值
 int target_port = 9000;               // 默认值
 
+uint64_t total_bytes_sent = 0;
+uint64_t total_bytes_received = 0;
+
 // 定义日志级别
 enum LogLevel {
     LOG_ERROR = 0,
@@ -200,24 +203,105 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             Logger::error("Read error: " + std::string(strerror(errno)));
             goto close_connection;
         } else if (n == 0) {
+            // 在关闭连接前处理剩余数据
+            if (!conn->remaining_data.empty() && encrypt) {
+                Logger::debug("Processing remaining " + 
+                             Logger::toString(conn->remaining_data.size()) + 
+                             " bytes before closing");
+
+                // 如果剩余数据不是BLOCK_SIZE的整数倍，需要进行填充
+                size_t padding_needed = 0;
+                if (conn->remaining_data.size() % BLOCK_SIZE != 0) {
+                    padding_needed = BLOCK_SIZE - (conn->remaining_data.size() % BLOCK_SIZE);
+                    size_t original_size = conn->remaining_data.size();
+                    conn->remaining_data.resize(original_size + padding_needed);
+                    // PKCS7填充
+                    for (size_t i = original_size; i < conn->remaining_data.size(); i++) {
+                        conn->remaining_data[i] = padding_needed;
+                    }
+                }
+
+                // 处理剩余数据
+                size_t process_size = conn->remaining_data.size();
+                
+                int pipefd[2];
+                if (pipe(pipefd) < 0) {
+                    Logger::error("Failed to create pipe for remaining data");
+                    goto close_connection;
+                }
+
+                ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
+                close(pipefd[1]);
+                
+                if (written != process_size) {
+                    Logger::error("Failed to write remaining data to pipe");
+                    close(pipefd[0]);
+                    goto close_connection;
+                }
+
+                int outpipefd[2];
+                if (pipe(outpipefd) < 0) {
+                    Logger::error("Failed to create output pipe for remaining data");
+                    close(pipefd[0]);
+                    goto close_connection;
+                }
+
+                conn->crypto.encrypt(pipefd[0], outpipefd[1], process_size);
+                close(pipefd[0]);
+                close(outpipefd[1]);
+
+                char encrypted[BUFFER_SIZE];
+                ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE);
+                close(outpipefd[0]);
+
+                if (enc_len > 0) {
+                    ssize_t sent = sendAll(toFd, encrypted, enc_len);
+                    if (sent < 0) {
+                        Logger::error("Failed to send remaining encrypted data");
+                        goto close_connection;
+                    }
+                    Logger::debug("Sent final " + Logger::toString(sent) + " encrypted bytes");
+                }
+                conn->remaining_data.clear();
+            }
+
             if (fromFd == conn->clientFd) {
                 Logger::info("Client connection closed");
             } else {
                 Logger::info("Server connection closed");
             }
-            goto close_connection;  // 正常关闭连接
+            goto close_connection;
         }
 
         Logger::debug("Read " + Logger::toString(n) + " bytes from fd " + Logger::toString(fromFd));
+        
 
         if (encrypt) {
             // 将数据添加到缓冲区
             conn->remaining_data.insert(conn->remaining_data.end(), buffer, buffer + n);
 
+            total_bytes_received += n;
+            Logger::info("Total bytes received: " + Logger::toString(total_bytes_received));
+
             // 处理完整的数据块
-            while (conn->remaining_data.size() >= BLOCK_SIZE) {
-                // 计算可以处理的数据大小（必须是块大小的倍数）
-                size_t process_size = (conn->remaining_data.size() / BLOCK_SIZE) * BLOCK_SIZE;
+            while (!conn->remaining_data.empty()) {
+                // 计算可以处理的数据大小
+                size_t process_size = conn->remaining_data.size();
+                
+                // 如果数据不是BLOCK_SIZE的整数倍，需要填充
+                size_t padding_needed = 0;
+                if (process_size % BLOCK_SIZE != 0) {
+                    padding_needed = BLOCK_SIZE - (process_size % BLOCK_SIZE);
+                    size_t original_size = process_size;
+                    conn->remaining_data.resize(original_size + padding_needed);
+                    // PKCS7填充
+                    for (size_t i = original_size; i < conn->remaining_data.size(); i++) {
+                        conn->remaining_data[i] = padding_needed;
+                    }
+                    process_size += padding_needed;
+                }
+
+                // 确保不超过缓冲区大小
                 if (process_size > BUFFER_SIZE) {
                     process_size = (BUFFER_SIZE / BLOCK_SIZE) * BLOCK_SIZE;
                 }
@@ -231,6 +315,8 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
 
                 ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
                 close(pipefd[1]);
+                total_bytes_sent += written;
+                Logger::info("Total bytes sent: " + Logger::toString(total_bytes_sent));
 
                 if (written != process_size) {
                     Logger::error("Failed to write to pipe");

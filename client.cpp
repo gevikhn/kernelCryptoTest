@@ -18,6 +18,9 @@
 #define PROXY_PORT 8888
 #define BLOCK_SIZE 16
 
+uint64_t total_received_from_proxy = 0;
+uint64_t total_sent_to_client = 0;
+
 struct Connection {
     int clientFd;      // 应用程序连接
     int proxyFd;       // 代理连接
@@ -153,6 +156,7 @@ void processHttpRequest(Connection* conn, const char* buffer, size_t n) {
 // 修改 forwardData 函数
 void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epollFd) {
     char buffer[BUFFER_SIZE];
+    size_t total_sent = 0;
     
     while (true) {
         ssize_t n = read(fromFd, buffer, sizeof(buffer));
@@ -164,51 +168,68 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             std::cerr << "Read error: " << strerror(errno) << std::endl;
             goto close_connection;
         } else if (n == 0) {
-            // 连接关闭前处理剩余数据
+            // 在关闭连接前处理剩余数据
             if (!conn->remaining_data.empty() && fromFd == conn->proxyFd) {
-                size_t process_size = conn->remaining_data.size();
-                if (process_size % BLOCK_SIZE != 0) {
-                    std::cerr << "Invalid remaining data size" << std::endl;
-                    goto close_connection;
-                }
+                std::cout << "Processing remaining " << conn->remaining_data.size() 
+                         << " bytes before closing" << std::endl;
 
-                int pipefd[2];
-                if (pipe(pipefd) < 0) {
-                    std::cerr << "Failed to create pipe" << std::endl;
-                    goto close_connection;
-                }
-
-                ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
-                close(pipefd[1]);
-
-                if (written != process_size) {
-                    std::cerr << "Failed to write to pipe" << std::endl;
-                    close(pipefd[0]);
-                    goto close_connection;
-                }
-
-                int outpipefd[2];
-                if (pipe(outpipefd) < 0) {
-                    std::cerr << "Failed to create output pipe" << std::endl;
-                    close(pipefd[0]);
-                    goto close_connection;
-                }
-
-                conn->crypto.decrypt(pipefd[0], outpipefd[1], process_size);
-                close(pipefd[0]);
-                close(outpipefd[1]);
-
-                char decrypted[BUFFER_SIZE];
-                ssize_t dec_len = read(outpipefd[0], decrypted, BUFFER_SIZE);
-                close(outpipefd[0]);
-
-                if (dec_len > 0) {
-                    ssize_t sent = write(conn->clientFd, decrypted, dec_len);
-                    if (sent > 0) {
-                        std::cout << "Sent final " << sent << " decrypted bytes" << std::endl;
+                // 确保处理所有剩余数据，即使不是BLOCK_SIZE的整数倍
+                while (!conn->remaining_data.empty()) {
+                    // 计算本次处理的数据大小
+                    size_t process_size = conn->remaining_data.size();
+                    if (process_size % BLOCK_SIZE != 0) {
+                        std::cerr << "Invalid remaining data size: " << process_size << std::endl;
+                        goto close_connection;
                     }
+
+                    if (process_size > BUFFER_SIZE) {
+                        process_size = (BUFFER_SIZE / BLOCK_SIZE) * BLOCK_SIZE;
+                    }
+
+                    int pipefd[2];
+                    if (pipe(pipefd) < 0) {
+                        std::cerr << "Failed to create pipe for remaining data" << std::endl;
+                        goto close_connection;
+                    }
+
+                    ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
+                    close(pipefd[1]);
+
+                    if (written != process_size) {
+                        std::cerr << "Failed to write remaining data to pipe" << std::endl;
+                        close(pipefd[0]);
+                        goto close_connection;
+                    }
+
+                    int outpipefd[2];
+                    if (pipe(outpipefd) < 0) {
+                        std::cerr << "Failed to create output pipe for remaining data" << std::endl;
+                        close(pipefd[0]);
+                        goto close_connection;
+                    }
+
+                    conn->crypto.decrypt(pipefd[0], outpipefd[1], process_size);
+                    close(pipefd[0]);
+                    close(outpipefd[1]);
+
+                    char decrypted[BUFFER_SIZE];
+                    ssize_t dec_len = read(outpipefd[0], decrypted, BUFFER_SIZE);
+                    close(outpipefd[0]);
+
+                    if (dec_len > 0) {
+                        ssize_t sent = write(conn->clientFd, decrypted, dec_len);
+                        if (sent > 0) {
+                            std::cout << "Sent final " << sent << " decrypted bytes" << std::endl;
+                        } else if (sent < 0) {
+                            std::cerr << "Failed to send decrypted data: " << strerror(errno) << std::endl;
+                            goto close_connection;
+                        }
+                    }
+
+                    // 从缓冲区移除已处理的数据
+                    conn->remaining_data.erase(conn->remaining_data.begin(), 
+                                            conn->remaining_data.begin() + process_size);
                 }
-                conn->remaining_data.clear();
             }
             goto close_connection;
         }
@@ -219,13 +240,17 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             // 从客户端收到的数据需要加密
             processHttpRequest(conn, buffer, n);
         } else {
+            total_received_from_proxy += n;
+            std::cout << "Total received from proxy: " << total_received_from_proxy << std::endl;
+
             // 将数据添加到缓冲区
             conn->remaining_data.insert(conn->remaining_data.end(), buffer, buffer + n);
 
             // 处理完整的数据块
             while (conn->remaining_data.size() >= BLOCK_SIZE) {
                 // 计算可以处理的数据大小（必须是块大小的倍数）
-                size_t process_size = (conn->remaining_data.size() / BLOCK_SIZE) * BLOCK_SIZE;
+                size_t process_size = conn->remaining_data.size();
+                // 确保不超过缓冲区大小
                 if (process_size > BUFFER_SIZE) {
                     process_size = (BUFFER_SIZE / BLOCK_SIZE) * BLOCK_SIZE;
                 }
@@ -261,32 +286,39 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 close(outpipefd[0]);
 
                 if (dec_len > 0) {
-                    ssize_t sent = write(conn->clientFd, decrypted, dec_len);
-                    if (sent < 0) {
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                            // 等待可写
-                            fd_set write_fds;
-                            FD_ZERO(&write_fds);
-                            FD_SET(conn->clientFd, &write_fds);
-                            struct timeval tv = {.tv_sec = 30, .tv_usec = 0};
-                            int ready = select(conn->clientFd + 1, NULL, &write_fds, NULL, &tv);
-                            if (ready <= 0) {
-                                std::cerr << "Write timeout or error" << std::endl;
+                    // 使用循环确保所有数据都被发送
+                    size_t block_sent = 0;
+                    while (block_sent < dec_len) {
+                        ssize_t sent = write(conn->clientFd, decrypted + block_sent, dec_len - block_sent);
+                        if (sent < 0) {
+                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                                // 等待可写
+                                fd_set write_fds;
+                                FD_ZERO(&write_fds);
+                                FD_SET(conn->clientFd, &write_fds);
+                                struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+                                int ready = select(conn->clientFd + 1, NULL, &write_fds, NULL, &tv);
+                                if (ready > 0) continue;
+                                std::cerr << "Write timeout" << std::endl;
                                 goto close_connection;
                             }
-                            continue;
+                            std::cerr << "Write error: " << strerror(errno) << std::endl;
+                            goto close_connection;
                         }
-                        std::cerr << "Write error: " << strerror(errno) << std::endl;
-                        goto close_connection;
+                        block_sent += sent;
                     }
-                    std::cout << "Sent " << sent << " decrypted bytes" << std::endl;
+                    total_sent += block_sent;
+                    std::cout << "Sent " << block_sent << " decrypted bytes to client" << std::endl;
                 }
 
                 // 从缓冲区移除已处理的数据
                 conn->remaining_data.erase(conn->remaining_data.begin(), 
-                                        conn->remaining_data.begin() + process_size);
+                                         conn->remaining_data.begin() + process_size);
             }
         }
+
+        total_sent_to_client += total_sent;
+        std::cout << "Total sent to client: " << total_sent_to_client << std::endl;
     }
 
 close_connection:
