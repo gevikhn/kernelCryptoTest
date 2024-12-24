@@ -11,12 +11,97 @@
 #include <map>
 #include <sstream>
 #include <iomanip>
+#include <getopt.h>
 
 #define MAX_EVENTS 1024
 #define BUFFER_SIZE 8192
 #define CLIENT_PORT 10800
 #define PROXY_PORT 8888
 #define BLOCK_SIZE 16
+
+// 在 Logger 类定义之前添加颜色代码定义
+#define COLOR_RESET   "\033[0m"
+#define COLOR_ERROR   "\033[1;31m"      // 亮红色
+#define COLOR_WARN    "\033[1;33m"      // 亮黄色
+#define COLOR_INFO    "\033[1;32m"      // 亮绿色
+#define COLOR_DEBUG   "\033[1;36m"      // 亮青色
+
+// 全局变量声明
+std::string proxy_ip = "127.0.0.1";  // 默认值
+int proxy_port = 8888;               // 默认值
+
+// 定义日志级别
+enum LogLevel {
+    LOG_ERROR = 0,
+    LOG_WARN = 1,
+    LOG_INFO = 2,
+    LOG_DEBUG = 3
+};
+
+class Logger {
+public:
+    static void setLevel(LogLevel level) {
+        currentLevel = level;
+    }
+
+    static LogLevel getLevel() {
+        return currentLevel;
+    }
+
+    static void error(const std::string& msg) {
+        if (currentLevel >= LOG_ERROR) {
+            std::cerr << COLOR_ERROR << "ERROR" << COLOR_RESET << ": " 
+                     << msg << std::endl;
+        }
+    }
+
+    static void warn(const std::string& msg) {
+        if (currentLevel >= LOG_WARN) {
+            std::cout << COLOR_WARN << "WARN" << COLOR_RESET << ": " 
+                     << msg << std::endl;
+        }
+    }
+
+    static void info(const std::string& msg) {
+        if (currentLevel >= LOG_INFO) {
+            std::cout << COLOR_INFO << "INFO" << COLOR_RESET << ": " 
+                     << msg << std::endl;
+        }
+    }
+
+    static void debug(const std::string& msg) {
+        if (currentLevel >= LOG_DEBUG) {
+            std::cout << COLOR_DEBUG << "DEBUG" << COLOR_RESET << ": " 
+                     << msg << std::endl;
+        }
+    }
+
+    template<typename T>
+    static std::string toString(const T& value) {
+        std::ostringstream oss;
+        oss << value;
+        return oss.str();
+    }
+
+private:
+    static LogLevel currentLevel;
+};
+
+// 定义静态成员
+LogLevel Logger::currentLevel = LOG_INFO;
+
+void printUsage(const char* programName) {
+    std::cout << "Usage: " << programName << " [-l log_level] [-h] [-i proxy_ip] [-p proxy_port]" << std::endl;
+    std::cout << "Options:" << std::endl;
+    std::cout << "  -l log_level   Set log level (default: 2)" << std::endl;
+    std::cout << "    0 - ERROR only" << std::endl;
+    std::cout << "    1 - ERROR and WARN" << std::endl;
+    std::cout << "    2 - ERROR, WARN, and INFO" << std::endl;
+    std::cout << "    3 - ERROR, WARN, INFO, and DEBUG" << std::endl;
+    std::cout << "  -i proxy_ip    Set proxy server IP (default: 127.0.0.1)" << std::endl;
+    std::cout << "  -p proxy_port  Set proxy server port (default: 8888)" << std::endl;
+    std::cout << "  -h             Show this help message" << std::endl;
+}
 
 uint64_t total_received_from_proxy = 0;
 uint64_t total_sent_to_client = 0;
@@ -41,10 +126,10 @@ int connectToProxy() {
     memset(&proxyAddr, 0, sizeof(proxyAddr));
     proxyAddr.sin_family = AF_INET;
     proxyAddr.sin_port = htons(PROXY_PORT);
-    inet_pton(AF_INET, "192.168.2.203", &proxyAddr.sin_addr);
+    inet_pton(AF_INET, proxy_ip.c_str(), &proxyAddr.sin_addr);
 
     if (connect(proxyFd, (struct sockaddr*)&proxyAddr, sizeof(proxyAddr)) < 0) {
-        std::cerr << "Failed to connect to proxy: " << strerror(errno) << std::endl;
+        Logger::error("Failed to connect to proxy: " + std::string(strerror(errno)));
         close(proxyFd);
         return -1;
     }
@@ -53,110 +138,42 @@ int connectToProxy() {
     return proxyFd;
 }
 
-// 添加 HTTP 代理相关的函数
-void processHttpRequest(Connection* conn, const char* buffer, size_t n) {
-    // 解析 HTTP 请求的第一行，获取目标 URL
-    std::string request(buffer, n);
-    size_t first_line_end = request.find("\r\n");
-    if (first_line_end == std::string::npos) {
-        std::cerr << "Invalid HTTP request" << std::endl;
-        return;
-    }
+// 添加 sendAll 函数
+ssize_t sendAll(int fd, const char* buffer, size_t length) {
+    size_t total_sent = 0;
+    while (total_sent < length) {
+        ssize_t sent = send(fd, buffer + total_sent, length - total_sent, 0);
+        if (sent < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // 等待socket可写
+                fd_set write_fds;
+                FD_ZERO(&write_fds);
+                FD_SET(fd, &write_fds);
 
-    // 修改 HTTP 请求
-    std::string first_line = request.substr(0, first_line_end);
-    size_t first_space = first_line.find(" ");
-    size_t second_space = first_line.find(" ", first_space + 1);
-    if (first_space == std::string::npos || second_space == std::string::npos) {
-        std::cerr << "Invalid HTTP request line" << std::endl;
-        return;
-    }
-
-    // 提取原始 URL 并修改请求
-    std::string method = first_line.substr(0, first_space);
-    std::string url = first_line.substr(first_space + 1, second_space - first_space - 1);
-    std::string version = first_line.substr(second_space + 1);
-
-    // 移除 "http://host:port" 部分
-    size_t path_start = url.find("/", 7);  // 跳过 "http://"
-    if (path_start == std::string::npos) {
-        path_start = url.length();
-    }
-
-    // 构建新的请求
-    std::string new_request = method + " " + url.substr(path_start) + " " + version + "\r\n";
-    new_request += request.substr(first_line_end + 2);  // 添加剩余的请求头
-
-    // 加密并发送修改后的请求
-    size_t padding_len = BLOCK_SIZE - (new_request.length() % BLOCK_SIZE);
-    size_t total_len = new_request.length() + padding_len;
-    std::vector<char> padded_data(total_len);
-    
-    memcpy(padded_data.data(), new_request.c_str(), new_request.length());
-    for (size_t i = new_request.length(); i < total_len; i++) {
-        padded_data[i] = padding_len;
-    }
-
-    int pipefd[2];
-    if (pipe(pipefd) < 0) {
-        std::cerr << "Failed to create pipe" << std::endl;
-        return;
-    }
-
-    ssize_t written = write(pipefd[1], padded_data.data(), total_len);
-    close(pipefd[1]);
-
-    if (written != total_len) {
-        std::cerr << "Failed to write to pipe" << std::endl;
-        close(pipefd[0]);
-        return;
-    }
-
-    int outpipefd[2];
-    if (pipe(outpipefd) < 0) {
-        std::cerr << "Failed to create output pipe" << std::endl;
-        close(pipefd[0]);
-        return;
-    }
-
-    conn->crypto.encrypt(pipefd[0], outpipefd[1], total_len);
-    close(pipefd[0]);
-    close(outpipefd[1]);
-
-    char encrypted[BUFFER_SIZE];
-    ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE);
-    close(outpipefd[0]);
-
-    if (enc_len > 0) {
-        size_t total_sent = 0;
-        while (total_sent < enc_len) {
-            ssize_t sent = write(conn->proxyFd, encrypted + total_sent, enc_len - total_sent);
-            if (sent < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    fd_set write_fds;
-                    FD_ZERO(&write_fds);
-                    FD_SET(conn->proxyFd, &write_fds);
-
-                    struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
-                    int ready = select(conn->proxyFd + 1, NULL, &write_fds, NULL, &tv);
-                    
-                    if (ready > 0) continue;
-                    std::cerr << "Write timeout" << std::endl;
-                    return;
+                struct timeval tv = {.tv_sec = 1, .tv_usec = 0};  // 1秒超时
+                int ready = select(fd + 1, NULL, &write_fds, NULL, &tv);
+                
+                if (ready < 0) {
+                    Logger::error("Select error: " + std::string(strerror(errno)));
+                    return -1;
+                } else if (ready == 0) {
+                    Logger::warn("Send timeout");
+                    continue;
                 }
-                std::cerr << "Write error: " << strerror(errno) << std::endl;
-                return;
+                // socket 可写，继续发送
+                continue;
             }
-            total_sent += sent;
+            Logger::error("Send error: " + std::string(strerror(errno)));
+            return -1;
         }
-        std::cout << "Sent " << total_sent << " encrypted bytes to proxy" << std::endl;
+        total_sent += sent;
     }
+    return total_sent;
 }
 
 // 修改 forwardData 函数
 void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epollFd) {
     char buffer[BUFFER_SIZE];
-    size_t total_sent = 0;
     
     while (true) {
         ssize_t n = read(fromFd, buffer, sizeof(buffer));
@@ -165,118 +182,84 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return;  // 等待下次事件
             }
-            std::cerr << "Read error: " << strerror(errno) << std::endl;
+            Logger::error("Read error: " + std::string(strerror(errno)));
             goto close_connection;
         } else if (n == 0) {
-            // 在关闭连接前处理剩余数据
-            if (!conn->remaining_data.empty() && fromFd == conn->proxyFd) {
-                std::cout << "Processing remaining " << conn->remaining_data.size() 
-                         << " bytes before closing" << std::endl;
-
-                // 确保处理所有剩余数据，即使不是BLOCK_SIZE的整数倍
-                while (!conn->remaining_data.empty()) {
-                    // 计算本次处理的数据大小
-                    size_t process_size = conn->remaining_data.size();
-                    if (process_size % BLOCK_SIZE != 0) {
-                        std::cerr << "Invalid remaining data size: " << process_size << std::endl;
-                        goto close_connection;
-                    }
-
-                    if (process_size > BUFFER_SIZE) {
-                        process_size = (BUFFER_SIZE / BLOCK_SIZE) * BLOCK_SIZE;
-                    }
-
-                    int pipefd[2];
-                    if (pipe(pipefd) < 0) {
-                        std::cerr << "Failed to create pipe for remaining data" << std::endl;
-                        goto close_connection;
-                    }
-
-                    ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
-                    close(pipefd[1]);
-
-                    if (written != process_size) {
-                        std::cerr << "Failed to write remaining data to pipe" << std::endl;
-                        close(pipefd[0]);
-                        goto close_connection;
-                    }
-
-                    int outpipefd[2];
-                    if (pipe(outpipefd) < 0) {
-                        std::cerr << "Failed to create output pipe for remaining data" << std::endl;
-                        close(pipefd[0]);
-                        goto close_connection;
-                    }
-
-                    conn->crypto.decrypt(pipefd[0], outpipefd[1], process_size);
-                    close(pipefd[0]);
-                    close(outpipefd[1]);
-
-                    char decrypted[BUFFER_SIZE];
-                    ssize_t dec_len = read(outpipefd[0], decrypted, BUFFER_SIZE);
-                    close(outpipefd[0]);
-
-                    //解除pkcs7填充
-                    size_t padding_len = decrypted[dec_len - 1];
-                    dec_len -= padding_len;
-
-                    if (dec_len > 0) {
-                        ssize_t sent = write(conn->clientFd, decrypted, dec_len);
-                        if (sent > 0) {
-                            std::cout << "Sent final " << sent << " decrypted bytes" << std::endl;
-                        } else if (sent < 0) {
-                            std::cerr << "Failed to send decrypted data: " << strerror(errno) << std::endl;
-                            goto close_connection;
-                        }
-                    }
-
-                    // 从缓冲区移除已处理的数据
-                    conn->remaining_data.erase(conn->remaining_data.begin(), 
-                                            conn->remaining_data.begin() + process_size);
-                }
-            }
             goto close_connection;
         }
 
-        std::cout << "Read " << n << " bytes from fd " << fromFd << std::endl;
+        Logger::debug("Read " + Logger::toString(n) + " bytes from fd " + Logger::toString(fromFd));
 
-        if (fromFd == conn->clientFd) {
-            // 从客户端收到的数据需要加密
-            processHttpRequest(conn, buffer, n);
+        if (encrypt) {
+            // 加密数据
+            size_t padding_len = BLOCK_SIZE - (n % BLOCK_SIZE);
+            size_t total_len = n + padding_len;
+            std::vector<char> padded_data(total_len);
+            
+            memcpy(padded_data.data(), buffer, n);
+            for (size_t i = n; i < total_len; i++) {
+                padded_data[i] = padding_len;
+            }
+
+            int pipefd[2];
+            if (pipe(pipefd) < 0) {
+                Logger::error("Failed to create pipe");
+                goto close_connection;
+            }
+
+            ssize_t written = write(pipefd[1], padded_data.data(), total_len);
+            close(pipefd[1]);
+
+            if (written != total_len) {
+                Logger::error("Failed to write to pipe");
+                close(pipefd[0]);
+                goto close_connection;
+            }
+
+            int outpipefd[2];
+            if (pipe(outpipefd) < 0) {
+                Logger::error("Failed to create output pipe");
+                close(pipefd[0]);
+                goto close_connection;
+            }
+
+            conn->crypto.encrypt(pipefd[0], outpipefd[1], total_len);
+            close(pipefd[0]);
+            close(outpipefd[1]);
+
+            char encrypted[BUFFER_SIZE];
+            ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE);
+            close(outpipefd[0]);
+
+            if (enc_len > 0) {
+                ssize_t sent = sendAll(toFd, encrypted, enc_len);  // 使用 sendAll 替代 write
+                if (sent < 0) {
+                    Logger::error("Send failed");
+                    goto close_connection;
+                }
+                Logger::debug("Sent " + Logger::toString(sent) + " encrypted bytes");
+            }
         } else {
-            total_received_from_proxy += n;
-            std::cout << "Total received from proxy: " << total_received_from_proxy << std::endl;
-
-            // 将数据添加到缓冲区
+            // 解密数据，先将数据添加到缓冲区
             conn->remaining_data.insert(conn->remaining_data.end(), buffer, buffer + n);
-
+            
             // 处理完整的数据块
             while (conn->remaining_data.size() >= BLOCK_SIZE) {
-                // 计算可以处理的数据大小（必须是块大小的倍数）
-                size_t process_size = conn->remaining_data.size();
-                // 确保不超过缓冲区大小
-                if (process_size > BUFFER_SIZE) {
-                    process_size = (BUFFER_SIZE / BLOCK_SIZE) * BLOCK_SIZE;
-                }
-
+                // 计算可以处理的数据大小（必须是BLOCK_SIZE的整数倍）
+                size_t process_size = (conn->remaining_data.size() / BLOCK_SIZE) * BLOCK_SIZE;
+                
                 int pipefd[2];
                 if (pipe(pipefd) < 0) {
-                    std::cerr << "Failed to create pipe" << std::endl;
+                    Logger::error("Failed to create pipe");
                     goto close_connection;
                 }
 
-                ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
+                write(pipefd[1], conn->remaining_data.data(), process_size);
                 close(pipefd[1]);
-
-                if (written != process_size) {
-                    std::cerr << "Failed to write to pipe" << std::endl;
-                    close(pipefd[0]);
-                    goto close_connection;
-                }
 
                 int outpipefd[2];
                 if (pipe(outpipefd) < 0) {
-                    std::cerr << "Failed to create output pipe" << std::endl;
+                    Logger::error("Failed to create output pipe");
                     close(pipefd[0]);
                     goto close_connection;
                 }
@@ -288,71 +271,84 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 char decrypted[BUFFER_SIZE];
                 ssize_t dec_len = read(outpipefd[0], decrypted, BUFFER_SIZE);
                 close(outpipefd[0]);
-                //解除pkcs7填充
-                size_t padding_len = decrypted[dec_len - 1];
-                dec_len -= padding_len;
 
                 if (dec_len > 0) {
-                    // 使用循环确保所有数据都被发送
-                    size_t block_sent = 0;
-                    while (block_sent < dec_len) {
-                        ssize_t sent = write(conn->clientFd, decrypted + block_sent, dec_len - block_sent);
-                        total_sent_to_client += sent;
-                        std::cout << "Total sent to client: " << total_sent_to_client << std::endl;
-                        if (sent < 0) {
-                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                                // 等待可写
-                                fd_set write_fds;
-                                FD_ZERO(&write_fds);
-                                FD_SET(conn->clientFd, &write_fds);
-                                struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
-                                int ready = select(conn->clientFd + 1, NULL, &write_fds, NULL, &tv);
-                                if (ready > 0) continue;
-                                std::cerr << "Write timeout" << std::endl;
-                                goto close_connection;
-                            }
-                            std::cerr << "Write error: " << strerror(errno) << std::endl;
-                            goto close_connection;
-                        }
-                        block_sent += sent;
+                    // 移除填充
+                    size_t padding_len = decrypted[dec_len - 1];
+                    if (padding_len <= BLOCK_SIZE && padding_len > 0) {
+                        dec_len -= padding_len;
                     }
-                    total_sent += block_sent;
-                    std::cout << "Sent " << block_sent << " decrypted bytes to client" << std::endl;
+
+                    ssize_t sent = sendAll(toFd, decrypted, dec_len);  // 使用 sendAll 替代 write
+                    if (sent < 0) {
+                        Logger::error("Send failed");
+                        goto close_connection;
+                    }
+                    Logger::debug("Sent " + Logger::toString(sent) + " decrypted bytes");
                 }
 
                 // 从缓冲区移除已处理的数据
                 conn->remaining_data.erase(conn->remaining_data.begin(), 
-                                         conn->remaining_data.begin() + process_size);
+                                        conn->remaining_data.begin() + process_size);
             }
         }
-
     }
 
 close_connection:
-    std::cout << "Closing connection" << std::endl;
+    Logger::info("Closing connection");
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->clientFd, NULL);
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->proxyFd, NULL);
-    
-    // 确保所有数据都被发送
-    if (fromFd == conn->proxyFd) {
-        shutdown(conn->clientFd, SHUT_WR);
-        char temp[1024];
-        while (read(conn->clientFd, temp, sizeof(temp)) > 0);
-    } else {
-        shutdown(conn->proxyFd, SHUT_WR);
-        char temp[1024];
-        while (read(conn->proxyFd, temp, sizeof(temp)) > 0);
-    }
-    
     close(conn->clientFd);
     close(conn->proxyFd);
     delete conn;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    // 解析命令行参数
+    int opt;
+    while ((opt = getopt(argc, argv, "l:i:p:h")) != -1) {
+        switch (opt) {
+            case 'l':
+                {
+                    int level = std::atoi(optarg);
+                    if (level >= LOG_ERROR && level <= LOG_DEBUG) {
+                        Logger::setLevel(static_cast<LogLevel>(level));
+                    } else {
+                        Logger::error("Invalid log level: " + std::to_string(level));
+                        printUsage(argv[0]);
+                        return 1;
+                    }
+                }
+                break;
+            case 'i':
+                proxy_ip = optarg;
+                break;
+            case 'p':
+                {
+                    int port = std::atoi(optarg);
+                    if (port > 0 && port < 65536) {
+                        proxy_port = port;
+                    } else {
+                        Logger::error("Invalid port number: " + std::to_string(port));
+                        printUsage(argv[0]);
+                        return 1;
+                    }
+                }
+                break;
+            case 'h':
+                printUsage(argv[0]);
+                return 0;
+            default:
+                printUsage(argv[0]);
+                return 1;
+        }
+    }
+
+    Logger::info("Starting client with proxy server: " + proxy_ip + ":" + Logger::toString(proxy_port));
+
     int listenFd = socket(AF_INET, SOCK_STREAM, 0);
-    int opt = 1;
-    setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
+    int socket_opt = 1;
+    setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &socket_opt, sizeof(socket_opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -364,7 +360,7 @@ int main() {
     listen(listenFd, SOMAXCONN);
     setNonBlocking(listenFd);
 
-    std::cout << "Client listening on port " << CLIENT_PORT << std::endl;
+    Logger::info("Client listening on port " + Logger::toString(CLIENT_PORT));
 
     int epollFd = epoll_create1(0);
     struct epoll_event ev, events[MAX_EVENTS];

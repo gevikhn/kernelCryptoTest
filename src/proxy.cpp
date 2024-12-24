@@ -20,6 +20,11 @@
 #define PROXY_PORT 8888
 #define WORKER_COUNT 4  // 进程数量
 #define BLOCK_SIZE 16
+#define COLOR_RESET   "\033[0m"
+#define COLOR_ERROR   "\033[1;31m"      // 亮红色
+#define COLOR_WARN    "\033[1;33m"      // 亮黄色
+#define COLOR_INFO    "\033[1;32m"      // 亮绿色
+#define COLOR_DEBUG   "\033[1;36m"      // 亮青色
 
 // 全局变量声明
 std::string target_ip = "127.0.0.1";  // 默认值
@@ -48,25 +53,29 @@ public:
 
     static void error(const std::string& msg) {
         if (currentLevel >= LOG_ERROR) {
-            std::cerr << "ERROR: " << msg << std::endl;
+            std::cerr << COLOR_ERROR << "ERROR" << COLOR_RESET << ": " 
+                     << msg << std::endl;
         }
     }
 
     static void warn(const std::string& msg) {
         if (currentLevel >= LOG_WARN) {
-            std::cout << "WARN: " << msg << std::endl;
+            std::cout << COLOR_WARN << "WARN" << COLOR_RESET << ": " 
+                     << msg << std::endl;
         }
     }
 
     static void info(const std::string& msg) {
         if (currentLevel >= LOG_INFO) {
-            std::cout << "INFO: " << msg << std::endl;
+            std::cout << COLOR_INFO << "INFO" << COLOR_RESET << ": " 
+                     << msg << std::endl;
         }
     }
 
     static void debug(const std::string& msg) {
         if (currentLevel >= LOG_DEBUG) {
-            std::cout << "DEBUG: " << msg << std::endl;
+            std::cout << COLOR_DEBUG << "DEBUG" << COLOR_RESET << ": " 
+                     << msg << std::endl;
         }
     }
 
@@ -616,7 +625,7 @@ int main(int argc, char* argv[]) {
                     if (level >= LOG_ERROR && level <= LOG_DEBUG) {
                         Logger::setLevel(static_cast<LogLevel>(level));
                     } else {
-                        std::cerr << "Invalid log level: " << level << std::endl;
+                        Logger::error("Invalid log level: " + std::to_string(level));
                         printUsage(argv[0]);
                         return 1;
                     }
@@ -631,7 +640,7 @@ int main(int argc, char* argv[]) {
                     if (port > 0 && port < 65536) {
                         target_port = port;
                     } else {
-                        std::cerr << "Invalid port number: " << port << std::endl;
+                        Logger::error("Invalid port number: " + std::to_string(port));
                         printUsage(argv[0]);
                         return 1;
                     }
@@ -646,7 +655,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    Logger::info("Target server: " + target_ip + ":" + Logger::toString(target_port));
+    Logger::info("Starting proxy with target server: " + target_ip + ":" + Logger::toString(target_port));
 
     signal(SIGCHLD, SIG_IGN);  // 避免僵尸进程
 
