@@ -4,8 +4,10 @@ cmake_minimum_required(VERSION 3.10)
 # 设置项目名称和版本
 project(ProxyProject VERSION 1.0.0 LANGUAGES CXX)
 
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
 # 设置C++标准
-set(CMAKE_CXX_STANDARD 17)  # 升级到更现代的C++标准
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -41,6 +43,9 @@ set(PROXY_SRCS
 # 创建可执行文件
 add_executable(client ${CLIENT_SRCS})
 add_executable(proxy ${PROXY_SRCS})
+
+target_link_libraries(client PRIVATE -static)
+target_link_libraries(proxy PRIVATE -static)
 
 # 安装目标
 install(TARGETS client proxy

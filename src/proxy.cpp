@@ -125,6 +125,8 @@ ssize_t sendAll(int fd, const char* buffer, size_t length) {
             Logger::error("Send error: " + std::string(strerror(errno)));
             return -1;
         }
+        //flush
+        fsync(fd);
         total_sent += sent;
     }
     return total_sent;
@@ -198,6 +200,9 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
         
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if(conn->remaining_data.size()){
+                    Logger::debug("Read " + Logger::toString(conn->remaining_data.size()) + " bytes from fd " + Logger::toString(fromFd));
+                }
                 return;  // 等待下次事件
             }
             Logger::error("Read error: " + std::string(strerror(errno)));
@@ -205,9 +210,9 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
         } else if (n == 0) {
             // 在关闭连接前处理剩余数据
             if (!conn->remaining_data.empty() && encrypt) {
-                Logger::debug("Processing remaining " + 
+                Logger::debug("\033[0;31m Processing remaining " + 
                              Logger::toString(conn->remaining_data.size()) + 
-                             " bytes before closing");
+                             " bytes before closing \033[0m");
 
                 // 如果剩余数据不是BLOCK_SIZE的整数倍，需要进行填充
                 size_t padding_needed = 0;
@@ -219,10 +224,17 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                     for (size_t i = original_size; i < conn->remaining_data.size(); i++) {
                         conn->remaining_data[i] = padding_needed;
                     }
+                }else{
+                    //原始数据为16的倍数时，填充16个0x10
+                    size_t original_size = conn->remaining_data.size();
+                    conn->remaining_data.resize(original_size + BLOCK_SIZE);
+                    for (size_t i = original_size; i < conn->remaining_data.size(); i++) {
+                        conn->remaining_data[i] = BLOCK_SIZE;
+                    }
                 }
 
                 // 处理剩余数据
-                size_t process_size = conn->remaining_data.size();
+                ssize_t process_size = conn->remaining_data.size();
                 
                 int pipefd[2];
                 if (pipe(pipefd) < 0) {
@@ -250,8 +262,13 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 close(pipefd[0]);
                 close(outpipefd[1]);
 
-                char encrypted[BUFFER_SIZE];
-                ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE);
+                char encrypted[BUFFER_SIZE * 2];
+                ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE * 2);
+                if(enc_len != process_size){
+                    Logger::error("Read encrypted data failed");
+                    close(outpipefd[0]);
+                    goto close_connection;
+                }
                 close(outpipefd[0]);
 
                 if (enc_len > 0) {
@@ -278,6 +295,9 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
 
         if (encrypt) {
             // 将数据添加到缓冲区
+            if(conn->remaining_data.size()){
+                Logger::debug("\033[0;30;41m Have data \033[0m");
+            }
             conn->remaining_data.insert(conn->remaining_data.end(), buffer, buffer + n);
 
             total_bytes_received += n;
@@ -286,7 +306,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             // 处理完整的数据块
             while (!conn->remaining_data.empty()) {
                 // 计算可以处理的数据大小
-                size_t process_size = conn->remaining_data.size();
+                ssize_t process_size = conn->remaining_data.size();
                 
                 // 如果数据不是BLOCK_SIZE的整数倍，需要填充
                 size_t padding_needed = 0;
@@ -299,12 +319,21 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                         conn->remaining_data[i] = padding_needed;
                     }
                     process_size += padding_needed;
+                }else{
+                    //原始数据为16的倍数时，填充16个0x10
+                    size_t original_size = process_size;
+                    conn->remaining_data.resize(original_size + BLOCK_SIZE);
+                    for (size_t i = original_size; i < conn->remaining_data.size(); i++) {
+                        conn->remaining_data[i] = BLOCK_SIZE;
+                    }
+                    process_size += BLOCK_SIZE;
                 }
 
                 // 确保不超过缓冲区大小
-                if (process_size > BUFFER_SIZE) {
+                /* if (process_size > BUFFER_SIZE) {
+                    Logger::debug("\033[0;30;41m Process size too large \033[0m");
                     process_size = (BUFFER_SIZE / BLOCK_SIZE) * BLOCK_SIZE;
-                }
+                } */
 
                 // 加密数据
                 int pipefd[2];
@@ -316,7 +345,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
                 close(pipefd[1]);
                 total_bytes_sent += written;
-                Logger::info("Total bytes sent: " + Logger::toString(total_bytes_sent));
+                Logger::info("Total bytes sent: " + Logger::toString(total_bytes_sent) + "remain:" + Logger::toString(conn->remaining_data.size()));
 
                 if (written != process_size) {
                     Logger::error("Failed to write to pipe");
@@ -335,8 +364,13 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 close(pipefd[0]);
                 close(outpipefd[1]);
 
-                char encrypted[BUFFER_SIZE];
-                ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE);
+                char encrypted[BUFFER_SIZE * 2];
+                ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE * 2);
+                if(enc_len != process_size){
+                    Logger::error("Read encrypted data failed");
+                    close(outpipefd[0]);
+                    goto close_connection;
+                }
                 close(outpipefd[0]);
 
                 if (enc_len > 0) {
@@ -417,12 +451,21 @@ close_connection:
 
 // 子进程事件循环
 void workerProcess(int listenFd) {
+    //创建epoll
     int epollFd = epoll_create1(0);
+    if (epollFd < 0) {
+        Logger::error("Failed to create epoll: " + std::string(strerror(errno)));
+        return;
+    }
     struct epoll_event ev, events[MAX_EVENTS];
 
-    ev.events = EPOLLIN;
+    ev.events = EPOLLIN; //监听可读事件
     ev.data.fd = listenFd;
-    epoll_ctl(epollFd, EPOLL_CTL_ADD, listenFd, &ev);
+    
+    if(epoll_ctl(epollFd, EPOLL_CTL_ADD, listenFd, &ev) < 0){
+        Logger::error("Failed to add listenFd to epoll: " + std::string(strerror(errno)));
+        return;
+    }
 
     unsigned char key[AES_KEY_SIZE] = {0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,
                                      0x39,0x30,0x61,0x62,0x63,0x64,0x65,0x66};

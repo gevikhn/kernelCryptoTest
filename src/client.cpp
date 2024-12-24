@@ -41,7 +41,7 @@ int connectToProxy() {
     memset(&proxyAddr, 0, sizeof(proxyAddr));
     proxyAddr.sin_family = AF_INET;
     proxyAddr.sin_port = htons(PROXY_PORT);
-    inet_pton(AF_INET, "127.0.0.1", &proxyAddr.sin_addr);
+    inet_pton(AF_INET, "192.168.2.203", &proxyAddr.sin_addr);
 
     if (connect(proxyFd, (struct sockaddr*)&proxyAddr, sizeof(proxyAddr)) < 0) {
         std::cerr << "Failed to connect to proxy: " << strerror(errno) << std::endl;
@@ -216,6 +216,10 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                     ssize_t dec_len = read(outpipefd[0], decrypted, BUFFER_SIZE);
                     close(outpipefd[0]);
 
+                    //解除pkcs7填充
+                    size_t padding_len = decrypted[dec_len - 1];
+                    dec_len -= padding_len;
+
                     if (dec_len > 0) {
                         ssize_t sent = write(conn->clientFd, decrypted, dec_len);
                         if (sent > 0) {
@@ -284,12 +288,17 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 char decrypted[BUFFER_SIZE];
                 ssize_t dec_len = read(outpipefd[0], decrypted, BUFFER_SIZE);
                 close(outpipefd[0]);
+                //解除pkcs7填充
+                size_t padding_len = decrypted[dec_len - 1];
+                dec_len -= padding_len;
 
                 if (dec_len > 0) {
                     // 使用循环确保所有数据都被发送
                     size_t block_sent = 0;
                     while (block_sent < dec_len) {
                         ssize_t sent = write(conn->clientFd, decrypted + block_sent, dec_len - block_sent);
+                        total_sent_to_client += sent;
+                        std::cout << "Total sent to client: " << total_sent_to_client << std::endl;
                         if (sent < 0) {
                             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                                 // 等待可写
@@ -317,8 +326,6 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             }
         }
 
-        total_sent_to_client += total_sent;
-        std::cout << "Total sent to client: " << total_sent_to_client << std::endl;
     }
 
 close_connection:
