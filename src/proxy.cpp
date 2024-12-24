@@ -16,7 +16,7 @@
 #include <sys/select.h>
 
 #define MAX_EVENTS 1024
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 8192
 #define PROXY_PORT 8888
 #define WORKER_COUNT 4  // 进程数量
 #define BLOCK_SIZE 16
