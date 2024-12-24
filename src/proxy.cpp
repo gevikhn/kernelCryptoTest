@@ -17,7 +17,7 @@
 #include <netinet/tcp.h>
 
 #define MAX_EVENTS 1024
-#define BUFFER_SIZE 65535
+#define BUFFER_SIZE 8192
 #define PROXY_PORT 8888
 #define WORKER_COUNT 4  // 进程数量
 #define BLOCK_SIZE 16
@@ -209,6 +209,15 @@ int connectToServer() {
     return serverFd;
 }
 
+/*
+// 当前的数据流程：
+buffer -> remaining_data -> pipe -> encrypt/decrypt -> pipe -> encrypted/decrypted buffer -> send
+内存拷贝占用了大量CPU事件
+尝试去除read和remaing_data，使用splice直接从server socket传递给AF_ALG socket，并从AF_ALG socket传递给client socket
+需要考虑到补位
+优化狗的数据流应该为
+splice -> pipe -> encrypt/decrypt -> pipe -> send
+*/
 // 数据转发
 void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epollFd) {
     char buffer[BUFFER_SIZE];

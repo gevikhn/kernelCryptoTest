@@ -15,7 +15,7 @@
 #include <netinet/tcp.h>
 
 #define MAX_EVENTS 1024
-#define BUFFER_SIZE 65535
+#define BUFFER_SIZE 8192
 #define CLIENT_PORT 10800
 #define PROXY_PORT 8888
 #define BLOCK_SIZE 16
