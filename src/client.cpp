@@ -12,9 +12,10 @@
 #include <sstream>
 #include <iomanip>
 #include <getopt.h>
+#include <netinet/tcp.h>
 
 #define MAX_EVENTS 1024
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE 65535
 #define CLIENT_PORT 10800
 #define PROXY_PORT 8888
 #define BLOCK_SIZE 16
@@ -122,6 +123,15 @@ void setNonBlocking(int fd) {
 // 连接到代理服务器
 int connectToProxy() {
     int proxyFd = socket(AF_INET, SOCK_STREAM, 0);
+
+    // 添加TCP优化选项
+    int flag = 1;
+    setsockopt(proxyFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    int sendbuf = 256 * 1024;
+    int recvbuf = 256 * 1024;
+    setsockopt(proxyFd, SOL_SOCKET, SO_SNDBUF, &sendbuf, sizeof(sendbuf));
+    setsockopt(proxyFd, SOL_SOCKET, SO_RCVBUF, &recvbuf, sizeof(recvbuf));
+    
     struct sockaddr_in proxyAddr;
     memset(&proxyAddr, 0, sizeof(proxyAddr));
     proxyAddr.sin_family = AF_INET;
@@ -192,13 +202,26 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
 
         if (encrypt) {
             // 加密数据
-            size_t padding_len = BLOCK_SIZE - (n % BLOCK_SIZE);
-            size_t total_len = n + padding_len;
-            std::vector<char> padded_data(total_len);
-            
-            memcpy(padded_data.data(), buffer, n);
-            for (size_t i = n; i < total_len; i++) {
-                padded_data[i] = padding_len;
+
+            // 添加填充
+            std::vector<char> padded_data;
+            ssize_t total_len = n;
+            if (n % BLOCK_SIZE != 0) {
+                size_t padding_len = BLOCK_SIZE - (n % BLOCK_SIZE);
+                total_len += padding_len;
+                padded_data.resize(total_len);
+                memcpy(padded_data.data(), buffer, n);
+                for (size_t i = n; i < n + padding_len; i++) {
+                    padded_data[i] = padding_len;
+                }
+            }else{
+                // 数据长度是BLOCK_SIZE的整数倍，填充16个16
+                total_len += BLOCK_SIZE;
+                padded_data.resize(total_len);
+                memcpy(padded_data.data(), buffer, n);
+                for (size_t i = n; i < total_len; i++) {
+                    padded_data[i] = BLOCK_SIZE;
+                }   
             }
 
             int pipefd[2];
@@ -227,8 +250,8 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             close(pipefd[0]);
             close(outpipefd[1]);
 
-            char encrypted[BUFFER_SIZE];
-            ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE);
+            char encrypted[BUFFER_SIZE * 2];
+            ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE * 2);
             close(outpipefd[0]);
 
             if (enc_len > 0) {
@@ -387,6 +410,15 @@ int main(int argc, char* argv[]) {
                 int clientFd = accept(listenFd, (struct sockaddr*)&clientAddr, &clientAddrLen);
                 
                 if (clientFd < 0) continue;
+
+                // 添加TCP优化选项
+                int flag = 1;
+                setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+                int sendbuf = 256 * 1024;
+                int recvbuf = 256 * 1024;
+                setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sendbuf, sizeof(sendbuf));
+                setsockopt(clientFd, SOL_SOCKET, SO_RCVBUF, &recvbuf, sizeof(recvbuf));
+                
 
                 setNonBlocking(clientFd);
 

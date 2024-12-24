@@ -14,9 +14,10 @@
 #include <getopt.h>
 #include <vector>
 #include <sys/select.h>
+#include <netinet/tcp.h>
 
 #define MAX_EVENTS 1024
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE 65535
 #define PROXY_PORT 8888
 #define WORKER_COUNT 4  // 进程数量
 #define BLOCK_SIZE 16
@@ -134,8 +135,7 @@ ssize_t sendAll(int fd, const char* buffer, size_t length) {
             Logger::error("Send error: " + std::string(strerror(errno)));
             return -1;
         }
-        //flush
-        fsync(fd);
+
         total_sent += sent;
     }
     return total_sent;
@@ -150,6 +150,15 @@ int connectToServer() {
         Logger::error("Failed to create socket: " + std::string(strerror(errno)));
         return -1;
     }
+
+    // 添加TCP优化选项
+    int flag = 1;
+    setsockopt(serverFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    int sendbuf = 256 * 1024;
+    int recvbuf = 256 * 1024;
+    setsockopt(serverFd, SOL_SOCKET, SO_SNDBUF, &sendbuf, sizeof(sendbuf));
+    setsockopt(serverFd, SOL_SOCKET, SO_RCVBUF, &recvbuf, sizeof(recvbuf));
+
 
     struct sockaddr_in serverAddr;
     memset(&serverAddr, 0, sizeof(serverAddr));
@@ -433,6 +442,10 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             close(outpipefd[0]);
 
             if (dec_len > 0) {
+                //去除填充
+                size_t padding_len = decrypted[dec_len - 1];
+                dec_len -= padding_len;
+                //打印解密后的数据
                 ssize_t sent = sendAll(toFd, decrypted, dec_len);
                 if (sent < 0) {
                     Logger::error("Send failed");
@@ -506,6 +519,14 @@ void workerProcess(int listenFd) {
                     Logger::error("Accept failed: " + std::string(strerror(errno)));
                     continue;
                 }
+
+                // 添加TCP优化选项
+                int flag = 1;
+                setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+                int sendbuf = 256 * 1024;
+                int recvbuf = 256 * 1024;
+                setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sendbuf, sizeof(sendbuf));
+                setsockopt(clientFd, SOL_SOCKET, SO_RCVBUF, &recvbuf, sizeof(recvbuf));
 
                 Connection* conn = new Connection();
                 conn->clientFd = clientFd;
@@ -661,7 +682,18 @@ int main(int argc, char* argv[]) {
 
     int listenFd = socket(AF_INET, SOCK_STREAM, 0);
     int socket_opt = 1;
+
+    // 设置TCP缓冲区大小
+    int sendbuf = 256 * 1024;  // 256KB
+    int recvbuf = 256 * 1024;  // 256KB
+    setsockopt(listenFd, SOL_SOCKET, SO_SNDBUF, &sendbuf, sizeof(sendbuf));
+    setsockopt(listenFd, SOL_SOCKET, SO_RCVBUF, &recvbuf, sizeof(recvbuf));
+
+    //设置socket选项
     setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &socket_opt, sizeof(socket_opt));
+
+    int flag = 1;
+    setsockopt(listenFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
