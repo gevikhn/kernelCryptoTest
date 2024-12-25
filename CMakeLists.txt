@@ -12,16 +12,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # 设置构建类型
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
+# if(NOT CMAKE_BUILD_TYPE)
+#     set(CMAKE_BUILD_TYPE Release)
+# endif()
 
 # 添加编译选项
 add_compile_options(
     -Wall
     -Wextra
     -Wpedantic
-    -O2
 )
 
 # 设置输出目录

@@ -123,16 +123,16 @@ ssize_t sendAll(int fd, const char* buffer, size_t length) {
                 int ready = select(fd + 1, NULL, &write_fds, NULL, &tv);
                 
                 if (ready < 0) {
-                    Logger::error("Select error: " + std::string(strerror(errno)));
+                    //Logger::error("Select error: " + std::string(strerror(errno)));
                     return -1;
                 } else if (ready == 0) {
-                    Logger::warn("Send timeout");
+                    //Logger::warn("Send timeout");
                     continue;
                 }
                 // socket 可写，继续发送
                 continue;
             }
-            Logger::error("Send error: " + std::string(strerror(errno)));
+            //Logger::error("Send error: " + std::string(strerror(errno)));
             return -1;
         }
 
@@ -143,11 +143,11 @@ ssize_t sendAll(int fd, const char* buffer, size_t length) {
 
 // 连接到目标服务器
 int connectToServer() {
-    Logger::debug("Connecting to server " + target_ip + ":" + Logger::toString(target_port));
+    //Logger::debug("Connecting to server " + target_ip + ":" + Logger::toString(target_port));
     
     int serverFd = socket(AF_INET, SOCK_STREAM, 0);
     if (serverFd < 0) {
-        Logger::error("Failed to create socket: " + std::string(strerror(errno)));
+        //Logger::error("Failed to create socket: " + std::string(strerror(errno)));
         return -1;
     }
 
@@ -165,22 +165,22 @@ int connectToServer() {
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(target_port);
     if (inet_pton(AF_INET, target_ip.c_str(), &serverAddr.sin_addr) <= 0) {
-        Logger::error("Invalid target IP address: " + target_ip);
+        //Logger::error("Invalid target IP address: " + target_ip);
         close(serverFd);
         return -1;
     }
 
     setNonBlocking(serverFd);
-    Logger::debug("Attempting to connect...");
+    //Logger::debug("Attempting to connect...");
     
     if (connect(serverFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
         if (errno != EINPROGRESS) {
-            Logger::error("Connect to server failed: " + std::string(strerror(errno)));
+            //Logger::error("Connect to server failed: " + std::string(strerror(errno)));
             close(serverFd);
             return -1;
         }
 
-        Logger::debug("Connection in progress, waiting...");
+        //Logger::debug("Connection in progress, waiting...");
         // 等待连接完成
         fd_set write_fds;
         FD_ZERO(&write_fds);
@@ -190,7 +190,7 @@ int connectToServer() {
         int ready = select(serverFd + 1, NULL, &write_fds, NULL, &tv);
         
         if (ready <= 0) {
-            Logger::error("Connect timeout or error");
+            //Logger::error("Connect timeout or error");
             close(serverFd);
             return -1;
         }
@@ -199,13 +199,13 @@ int connectToServer() {
         int error = 0;
         socklen_t len = sizeof(error);
         if (getsockopt(serverFd, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
-            Logger::error("Connect failed after select: " + std::string(strerror(error)));
+            //Logger::error("Connect failed after select: " + std::string(strerror(error)));
             close(serverFd);
             return -1;
         }
     }
 
-    Logger::info("Successfully connected to upstream server");
+    //Logger::info("Successfully connected to upstream server");
     return serverFd;
 }
 
@@ -229,18 +229,18 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if(conn->remaining_data.size()){
-                    Logger::debug("Read " + Logger::toString(conn->remaining_data.size()) + " bytes from fd " + Logger::toString(fromFd));
+                    //Logger::debug("Read " + Logger::toString(conn->remaining_data.size()) + " bytes from fd " + Logger::toString(fromFd));
                 }
                 return;  // 等待下次事件
             }
-            Logger::error("Read error: " + std::string(strerror(errno)));
+            //Logger::error("Read error: " + std::string(strerror(errno)));
             goto close_connection;
         } else if (n == 0) {
             // 在关闭连接前处理剩余数据
             if (!conn->remaining_data.empty() && encrypt) {
-                Logger::debug("\033[0;31m Processing remaining " + 
-                             Logger::toString(conn->remaining_data.size()) + 
-                             " bytes before closing \033[0m");
+                //Logger::debug("\033[0;31m Processing remaining " + 
+                            //  Logger::toString(conn->remaining_data.size()) + 
+                            //  " bytes before closing \033[0m");
 
                 // 如果剩余数据不是BLOCK_SIZE的整数倍，需要进行填充
                 size_t padding_needed = 0;
@@ -266,7 +266,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 
                 int pipefd[2];
                 if (pipe(pipefd) < 0) {
-                    Logger::error("Failed to create pipe for remaining data");
+                    //Logger::error("Failed to create pipe for remaining data");
                     goto close_connection;
                 }
 
@@ -274,14 +274,14 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 close(pipefd[1]);
                 
                 if (written != process_size) {
-                    Logger::error("Failed to write remaining data to pipe");
+                    //Logger::error("Failed to write remaining data to pipe");
                     close(pipefd[0]);
                     goto close_connection;
                 }
 
                 int outpipefd[2];
                 if (pipe(outpipefd) < 0) {
-                    Logger::error("Failed to create output pipe for remaining data");
+                    //Logger::error("Failed to create output pipe for remaining data");
                     close(pipefd[0]);
                     goto close_connection;
                 }
@@ -293,7 +293,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 char encrypted[BUFFER_SIZE * 2];
                 ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE * 2);
                 if(enc_len != process_size){
-                    Logger::error("Read encrypted data failed");
+                    //Logger::error("Read encrypted data failed");
                     close(outpipefd[0]);
                     goto close_connection;
                 }
@@ -302,34 +302,34 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 if (enc_len > 0) {
                     ssize_t sent = sendAll(toFd, encrypted, enc_len);
                     if (sent < 0) {
-                        Logger::error("Failed to send remaining encrypted data");
+                        //Logger::error("Failed to send remaining encrypted data");
                         goto close_connection;
                     }
-                    Logger::debug("Sent final " + Logger::toString(sent) + " encrypted bytes");
+                    //Logger::debug("Sent final " + Logger::toString(sent) + " encrypted bytes");
                 }
                 conn->remaining_data.clear();
             }
 
             if (fromFd == conn->clientFd) {
-                Logger::info("Client connection closed");
+                //Logger::info("Client connection closed");
             } else {
-                Logger::info("Server connection closed");
+                //Logger::info("Server connection closed");
             }
             goto close_connection;
         }
 
-        Logger::debug("Read " + Logger::toString(n) + " bytes from fd " + Logger::toString(fromFd));
+        //Logger::debug("Read " + Logger::toString(n) + " bytes from fd " + Logger::toString(fromFd));
         
 
         if (encrypt) {
             // 将数据添加到缓冲区
             if(conn->remaining_data.size()){
-                Logger::debug("\033[0;30;41m Have data \033[0m");
+                //Logger::debug("\033[0;30;41m Have data \033[0m");
             }
             conn->remaining_data.insert(conn->remaining_data.end(), buffer, buffer + n);
 
             total_bytes_received += n;
-            Logger::info("Total bytes received: " + Logger::toString(total_bytes_received));
+            //Logger::info("Total bytes received: " + Logger::toString(total_bytes_received));
 
             // 处理完整的数据块
             while (!conn->remaining_data.empty()) {
@@ -359,31 +359,31 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
 
                 // 确保不超过缓冲区大小
                 /* if (process_size > BUFFER_SIZE) {
-                    Logger::debug("\033[0;30;41m Process size too large \033[0m");
+                    //Logger::debug("\033[0;30;41m Process size too large \033[0m");
                     process_size = (BUFFER_SIZE / BLOCK_SIZE) * BLOCK_SIZE;
                 } */
 
                 // 加密数据
                 int pipefd[2];
                 if (pipe(pipefd) < 0) {
-                    Logger::error("Failed to create pipe");
+                    //Logger::error("Failed to create pipe");
                     goto close_connection;
                 }
 
                 ssize_t written = write(pipefd[1], conn->remaining_data.data(), process_size);
                 close(pipefd[1]);
                 total_bytes_sent += written;
-                Logger::info("Total bytes sent: " + Logger::toString(total_bytes_sent) + "remain:" + Logger::toString(conn->remaining_data.size()));
+                //Logger::info("Total bytes sent: " + Logger::toString(total_bytes_sent) + "remain:" + Logger::toString(conn->remaining_data.size()));
 
                 if (written != process_size) {
-                    Logger::error("Failed to write to pipe");
+                    //Logger::error("Failed to write to pipe");
                     close(pipefd[0]);
                     goto close_connection;
                 }
 
                 int outpipefd[2];
                 if (pipe(outpipefd) < 0) {
-                    Logger::error("Failed to create output pipe");
+                    //Logger::error("Failed to create output pipe");
                     close(pipefd[0]);
                     goto close_connection;
                 }
@@ -395,7 +395,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 char encrypted[BUFFER_SIZE * 2];
                 ssize_t enc_len = read(outpipefd[0], encrypted, BUFFER_SIZE * 2);
                 if(enc_len != process_size){
-                    Logger::error("Read encrypted data failed");
+                    //Logger::error("Read encrypted data failed");
                     close(outpipefd[0]);
                     goto close_connection;
                 }
@@ -404,10 +404,10 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 if (enc_len > 0) {
                     ssize_t sent = sendAll(toFd, encrypted, enc_len);
                     if (sent < 0) {
-                        Logger::error("Send failed");
+                        //Logger::error("Send failed");
                         goto close_connection;
                     }
-                    Logger::debug("Sent " + Logger::toString(sent) + " encrypted bytes");
+                    //Logger::debug("Sent " + Logger::toString(sent) + " encrypted bytes");
                 }
 
                 // 从缓冲区移除已处理的数据
@@ -417,13 +417,13 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
         } else {
             // 从客户端收到的加密数据，直接解密并转发
             if (n % BLOCK_SIZE != 0) {
-                Logger::error("Received data length not multiple of block size");
+                //Logger::error("Received data length not multiple of block size");
                 goto close_connection;
             }
 
             int pipefd[2];
             if (pipe(pipefd) < 0) {
-                Logger::error("Failed to create pipe");
+                //Logger::error("Failed to create pipe");
                 goto close_connection;
             }
 
@@ -431,14 +431,14 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             close(pipefd[1]);
 
             if (written != n) {
-                Logger::error("Failed to write to pipe");
+                //Logger::error("Failed to write to pipe");
                 close(pipefd[0]);
                 goto close_connection;
             }
 
             int outpipefd[2];
             if (pipe(outpipefd) < 0) {
-                Logger::error("Failed to create output pipe");
+                //Logger::error("Failed to create output pipe");
                 close(pipefd[0]);
                 goto close_connection;
             }
@@ -458,16 +458,16 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 //打印解密后的数据
                 ssize_t sent = sendAll(toFd, decrypted, dec_len);
                 if (sent < 0) {
-                    Logger::error("Send failed");
+                    //Logger::error("Send failed");
                     goto close_connection;
                 }
-                Logger::debug("Sent " + Logger::toString(sent) + " decrypted bytes");
+                //Logger::debug("Sent " + Logger::toString(sent) + " decrypted bytes");
             }
         }
     }
 
 close_connection:
-    Logger::info("Closing connection");
+    //Logger::info("Closing connection");
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->clientFd, NULL);
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->serverFd, NULL);
     
@@ -489,39 +489,44 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
     char buffer[BUFFER_SIZE];
     while(true){
         if(encrypt){
-            Logger::debug("Encrypt data");
-        int pipefd[2];
-        ssize_t spliced = 0;
-        ssize_t total_spliced = 0;
+            //Logger::debug("Encrypt data");
+            int pipefd[2];
+            ssize_t spliced = 0;
+            ssize_t total_spliced = 0;
+            ssize_t total_sent = 0;
 
         if(pipe(pipefd) < 0){
-            Logger::error("Failed to create pipe");
+            //Logger::error("Failed to create pipe");
             goto close_connection;
         }
         while(total_spliced < BUFFER_SIZE){
-            spliced = splice(fromFd, NULL, pipefd[1], NULL, BUFFER_SIZE, SPLICE_F_MOVE | SPLICE_F_MORE | SPLICE_F_NONBLOCK);
-            total_spliced += spliced;
+            size_t remaining = BUFFER_SIZE - total_spliced;
+            
+            spliced = splice(fromFd, NULL, pipefd[1], NULL, remaining, SPLICE_F_MOVE | SPLICE_F_MORE | SPLICE_F_NONBLOCK);
+            //Logger::debug("Splice " + Logger::toString(spliced) + " bytes");
             if(spliced < 0){
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    if(conn->remaining_data.size()){
-                        Logger::debug("Read " + Logger::toString(conn->remaining_data.size()) + " bytes from fd " + Logger::toString(fromFd));
-                    }
+                    if(total_spliced > 0) break;
+                    //Logger::debug("Wait for next event");
                     return;  // 等待下次事件
                 }
-                Logger::error("Failed to splice data");
-                break;
+                //Logger::debug("Failed to splice data");
+                goto cleanup;
             }else if(spliced == 0){
                 // 如果返回 0，表示数据传输完成
 
-                if (fromFd == conn->clientFd) {
-                    Logger::info("Client connection closed");
-                } else {
-                    Logger::info("Server connection closed");
+                if(total_spliced == 0) {
+                    //Logger::info(fromFd == conn->clientFd ? 
+                                // "Client connection closed" : 
+                                // "Server connection closed");
+                    goto cleanup;
                 }
                 break;
             }
+            total_spliced += spliced;
         }
         if(total_spliced == 0){
+            //Logger::debug("Total spliced is 0");
             goto close_connection;
         }
 
@@ -529,6 +534,7 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
             if(total_spliced % BLOCK_SIZE == 0){
                 //pkcs7 填充
                 ssize_t written = write(pipefd[1], padding_data, BLOCK_SIZE);
+                //Logger::debug("Write " + Logger::toString(written) + " bytes");
                 total_spliced += written;
                 close(pipefd[1]);
             }else{
@@ -537,6 +543,7 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
                 uint8_t *need_padding_data = new uint8_t[need_padding];
                 memset(need_padding_data, need_padding, need_padding);
                 ssize_t written = write(pipefd[1], need_padding_data, need_padding);
+                //Logger::debug("Write " + Logger::toString(written) + " bytes");
                 total_spliced += written;
                 close(pipefd[1]);
                 delete[] need_padding_data;
@@ -544,7 +551,7 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
 
             int outpipefd[2];
             if(pipe(outpipefd) < 0){
-                Logger::error("Failed to create output pipe");
+                //Logger::error("Failed to create output pipe");
                 goto close_connection;
             }
 
@@ -553,9 +560,10 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
             close(outpipefd[1]);
 
             //发送加密后的数据
-            ssize_t total_sent = 0;
+            
             while(total_sent < total_spliced){
                 ssize_t sent = splice(outpipefd[0], NULL, toFd, NULL, total_spliced, SPLICE_F_MOVE | SPLICE_F_MORE | SPLICE_F_NONBLOCK);
+                //Logger::debug("sent " + Logger::toString(sent) + " bytes");
                 if(sent < 0){
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         // 等待socket可写
@@ -567,52 +575,62 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
                         int ready = select(toFd + 1, NULL, &write_fds, NULL, &tv);
                         
                         if (ready < 0) {
-                            Logger::error("Select error: " + std::string(strerror(errno)));
+                            //Logger::error("Select error: " + std::string(strerror(errno)));
                             goto close_connection;
                         } else if (ready == 0) {
-                            Logger::warn("Send timeout");
+                            //Logger::warn("Send timeout");
                             continue;
                         }
                         // socket 可写，继续发送
                         continue;
                     }
-                    Logger::error("Failed to send encrypted data");
+                    //Logger::error("Failed to send encrypted data");
                     goto close_connection;
                 }
                 total_sent += sent;
+                //Logger::debug("Total sent " + Logger::toString(total_sent) + " bytes");
             }
 
             if(total_spliced == 0){
+                //Logger::debug("Total spliced is 0");
                 goto close_connection;
             }
-
+cleanup:
+            if(pipefd[0] != -1) close(pipefd[0]);
+            if(pipefd[1] != -1) close(pipefd[1]);
+            if(outpipefd[0] != -1) close(outpipefd[0]);
+            if(outpipefd[1] != -1) close(outpipefd[1]);
+            // if(spliced < 0 || total_spliced == 0) goto close_connection;
         }else{
+            //当前存在问题
             ssize_t n = read(fromFd, buffer, sizeof(buffer));
             if (n < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     if(conn->remaining_data.size()){
-                        Logger::debug("Read " + Logger::toString(conn->remaining_data.size()) + " bytes from fd " + Logger::toString(fromFd));
+                        //Logger::debug("Read " + Logger::toString(conn->remaining_data.size()) + " bytes from fd " + Logger::toString(fromFd));
                     }
                     return;  // 等待下次事件
                 }
-                Logger::error("Read error: " + std::string(strerror(errno)));
+                //Logger::error("Read error: " + std::string(strerror(errno)));
                 goto close_connection;
             } else if (n == 0) {
                     if (fromFd == conn->clientFd) {
-                    Logger::info("Client connection closed");
+                    //Logger::info("Client connection closed");
                 } else {
-                    Logger::info("Server connection closed");
+                    //Logger::info("Server connection closed");
                 }
                 goto close_connection;
-                // 从客户端收到的加密数据，直接解密并转发
+            }
+
+            // 从客户端收到的加密数据，直接解密并转发
                 if (n % BLOCK_SIZE != 0) {
-                    Logger::error("Received data length not multiple of block size");
+                    //Logger::error("Received data length not multiple of block size");
                     goto close_connection;
                 }
 
                 int pipefd[2];
                 if (pipe(pipefd) < 0) {
-                    Logger::error("Failed to create pipe");
+                    //Logger::error("Failed to create pipe");
                     goto close_connection;
                 }
 
@@ -620,14 +638,14 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
                 close(pipefd[1]);
 
                 if (written != n) {
-                    Logger::error("Failed to write to pipe");
+                    //Logger::error("Failed to write to pipe");
                     close(pipefd[0]);
                     goto close_connection;
                 }
 
                 int outpipefd[2];
                 if (pipe(outpipefd) < 0) {
-                    Logger::error("Failed to create output pipe");
+                    //Logger::error("Failed to create output pipe");
                     close(pipefd[0]);
                     goto close_connection;
                 }
@@ -647,12 +665,11 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
                     //打印解密后的数据
                     ssize_t sent = sendAll(toFd, decrypted, dec_len);
                     if (sent < 0) {
-                        Logger::error("Send failed");
+                        //Logger::error("Send failed");
                         goto close_connection;
                     }
-                    Logger::debug("Sent " + Logger::toString(sent) + " decrypted bytes");
+                    //Logger::debug("Sent " + Logger::toString(sent) + " decrypted bytes");
                 }
-            }
         }
         
         
@@ -660,7 +677,7 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
 
 
 close_connection:
-    Logger::info("Closing connection");
+    //Logger::info("Closing connection");
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->clientFd, NULL);
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->serverFd, NULL);
     
@@ -680,7 +697,7 @@ void workerProcess(int listenFd) {
     //创建epoll
     int epollFd = epoll_create1(0);
     if (epollFd < 0) {
-        Logger::error("Failed to create epoll: " + std::string(strerror(errno)));
+        //Logger::error("Failed to create epoll: " + std::string(strerror(errno)));
         return;
     }
     struct epoll_event ev, events[MAX_EVENTS];
@@ -689,7 +706,7 @@ void workerProcess(int listenFd) {
     ev.data.fd = listenFd;
     
     if(epoll_ctl(epollFd, EPOLL_CTL_ADD, listenFd, &ev) < 0){
-        Logger::error("Failed to add listenFd to epoll: " + std::string(strerror(errno)));
+        //Logger::error("Failed to add listenFd to epoll: " + std::string(strerror(errno)));
         return;
     }
 
@@ -702,7 +719,7 @@ void workerProcess(int listenFd) {
         int ready = epoll_wait(epollFd, events, MAX_EVENTS, -1);
         if (ready < 0) {
             if (errno == EINTR) continue;  // 被信号中断，继续等待
-            Logger::error("Epoll wait error: " + std::string(strerror(errno)));
+            //Logger::error("Epoll wait error: " + std::string(strerror(errno)));
             break;
         }
 
@@ -720,7 +737,7 @@ void workerProcess(int listenFd) {
                         // 没有更多连接，继续等待
                         continue;
                     }
-                    Logger::error("Accept failed: " + std::string(strerror(errno)));
+                    //Logger::error("Accept failed: " + std::string(strerror(errno)));
                     continue;
                 }
 
@@ -738,7 +755,7 @@ void workerProcess(int listenFd) {
                 // 连接上游服务器
                 conn->serverFd = connectToServer();
                 if (conn->serverFd < 0) {
-                    Logger::error("Failed to connect to upstream server");
+                    //Logger::error("Failed to connect to upstream server");
                     close(clientFd);
                     delete conn;
                     continue;
@@ -746,7 +763,7 @@ void workerProcess(int listenFd) {
 
                 // 初始化加密上下文
                 if (!conn->crypto.init(key, AES_KEY_SIZE)) {
-                    Logger::error("Failed to initialize crypto context");
+                    //Logger::error("Failed to initialize crypto context");
                     close(clientFd);
                     close(conn->serverFd);
                     delete conn;
@@ -757,7 +774,7 @@ void workerProcess(int listenFd) {
                 ev.events = EPOLLIN | EPOLLET;
                 ev.data.fd = clientFd;
                 if (epoll_ctl(epollFd, EPOLL_CTL_ADD, clientFd, &ev) < 0) {
-                    Logger::error("Failed to add client FD to epoll");
+                    //Logger::error("Failed to add client FD to epoll");
                     close(clientFd);
                     close(conn->serverFd);
                     delete conn;
@@ -766,7 +783,7 @@ void workerProcess(int listenFd) {
 
                 ev.data.fd = conn->serverFd;
                 if (epoll_ctl(epollFd, EPOLL_CTL_ADD, conn->serverFd, &ev) < 0) {
-                    Logger::error("Failed to add server FD to epoll");
+                    //Logger::error("Failed to add server FD to epoll");
                     epoll_ctl(epollFd, EPOLL_CTL_DEL, clientFd, NULL);
                     close(clientFd);
                     close(conn->serverFd);
@@ -777,13 +794,13 @@ void workerProcess(int listenFd) {
                 connections[clientFd] = conn;
                 connections[conn->serverFd] = conn;
                 
-                Logger::info("New connection established: client=" + 
-                           Logger::toString(clientFd) + ", server=" + 
-                           Logger::toString(conn->serverFd));
+                //Logger::info("New connection established: client=" + 
+                        //    Logger::toString(clientFd) + ", server=" + 
+                        //    Logger::toString(conn->serverFd));
             } else {
                 auto it = connections.find(currentFd);
                 if (it == connections.end()) {
-                    Logger::error("No connection found for FD: " + Logger::toString(currentFd));
+                    //Logger::error("No connection found for FD: " + Logger::toString(currentFd));
                     epoll_ctl(epollFd, EPOLL_CTL_DEL, currentFd, NULL);
                     close(currentFd);
                     continue;
@@ -803,9 +820,9 @@ void workerProcess(int listenFd) {
         while (it != connections.end()) {
             if (it->second->clientFd == -1 || it->second->serverFd == -1) {
                 Connection* conn = it->second;
-                Logger::info("Cleaning up connection: client=" + 
-                           Logger::toString(conn->clientFd) + ", server=" + 
-                           Logger::toString(conn->serverFd));
+                //Logger::info("Cleaning up connection: client=" + 
+                        //    Logger::toString(conn->clientFd) + ", server=" + 
+                        //    Logger::toString(conn->serverFd));
                 delete conn;
                 it = connections.erase(it);
             } else {
@@ -850,7 +867,7 @@ int main(int argc, char* argv[]) {
                     if (level >= LOG_ERROR && level <= LOG_DEBUG) {
                         Logger::setLevel(static_cast<LogLevel>(level));
                     } else {
-                        Logger::error("Invalid log level: " + std::to_string(level));
+                        //Logger::error("Invalid log level: " + std::to_string(level));
                         printUsage(argv[0]);
                         return 1;
                     }
@@ -865,7 +882,7 @@ int main(int argc, char* argv[]) {
                     if (port > 0 && port < 65536) {
                         target_port = port;
                     } else {
-                        Logger::error("Invalid port number: " + std::to_string(port));
+                        //Logger::error("Invalid port number: " + std::to_string(port));
                         printUsage(argv[0]);
                         return 1;
                     }
@@ -880,7 +897,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    Logger::info("Starting proxy with target server: " + target_ip + ":" + Logger::toString(target_port));
+    //Logger::info("Starting proxy with target server: " + target_ip + ":" + Logger::toString(target_port));
 
     signal(SIGCHLD, SIG_IGN);  // 避免僵尸进程
 
@@ -909,7 +926,7 @@ int main(int argc, char* argv[]) {
     listen(listenFd, SOMAXCONN);
     setNonBlocking(listenFd);
 
-    Logger::info("Proxy server listening on port " + Logger::toString(PROXY_PORT));
+    //Logger::info("Proxy server listening on port " + Logger::toString(PROXY_PORT));
 
     // 创建多个子进程
     for (int i = 0; i < WORKER_COUNT; i++) {

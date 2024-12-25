@@ -139,7 +139,7 @@ int connectToProxy() {
     inet_pton(AF_INET, proxy_ip.c_str(), &proxyAddr.sin_addr);
 
     if (connect(proxyFd, (struct sockaddr*)&proxyAddr, sizeof(proxyAddr)) < 0) {
-        Logger::error("Failed to connect to proxy: " + std::string(strerror(errno)));
+        //Logger::error("Failed to connect to proxy: " + std::string(strerror(errno)));
         close(proxyFd);
         return -1;
     }
@@ -164,16 +164,16 @@ ssize_t sendAll(int fd, const char* buffer, size_t length) {
                 int ready = select(fd + 1, NULL, &write_fds, NULL, &tv);
                 
                 if (ready < 0) {
-                    Logger::error("Select error: " + std::string(strerror(errno)));
+                    //Logger::error("Select error: " + std::string(strerror(errno)));
                     return -1;
                 } else if (ready == 0) {
-                    Logger::warn("Send timeout");
+                    //Logger::warn("Send timeout");
                     continue;
                 }
                 // socket 可写，继续发送
                 continue;
             }
-            Logger::error("Send error: " + std::string(strerror(errno)));
+            //Logger::error("Send error: " + std::string(strerror(errno)));
             return -1;
         }
         total_sent += sent;
@@ -192,13 +192,13 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return;  // 等待下次事件
             }
-            Logger::error("Read error: " + std::string(strerror(errno)));
+            //Logger::error("Read error: " + std::string(strerror(errno)));
             goto close_connection;
         } else if (n == 0) {
             goto close_connection;
         }
 
-        Logger::debug("Read " + Logger::toString(n) + " bytes from fd " + Logger::toString(fromFd));
+        //Logger::debug("Read " + Logger::toString(n) + " bytes from fd " + Logger::toString(fromFd));
 
         if (encrypt) {
             // 加密数据
@@ -226,7 +226,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
 
             int pipefd[2];
             if (pipe(pipefd) < 0) {
-                Logger::error("Failed to create pipe");
+                //Logger::error("Failed to create pipe");
                 goto close_connection;
             }
 
@@ -234,14 +234,14 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             close(pipefd[1]);
 
             if (written != total_len) {
-                Logger::error("Failed to write to pipe");
+                //Logger::error("Failed to write to pipe");
                 close(pipefd[0]);
                 goto close_connection;
             }
 
             int outpipefd[2];
             if (pipe(outpipefd) < 0) {
-                Logger::error("Failed to create output pipe");
+                //Logger::error("Failed to create output pipe");
                 close(pipefd[0]);
                 goto close_connection;
             }
@@ -257,10 +257,10 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
             if (enc_len > 0) {
                 ssize_t sent = sendAll(toFd, encrypted, enc_len);  // 使用 sendAll 替代 write
                 if (sent < 0) {
-                    Logger::error("Send failed");
+                    //Logger::error("Send failed");
                     goto close_connection;
                 }
-                Logger::debug("Sent " + Logger::toString(sent) + " encrypted bytes");
+                //Logger::debug("Sent " + Logger::toString(sent) + " encrypted bytes");
             }
         } else {
             // 解密数据，先将数据添加到缓冲区
@@ -273,7 +273,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
                 
                 int pipefd[2];
                 if (pipe(pipefd) < 0) {
-                    Logger::error("Failed to create pipe");
+                    //Logger::error("Failed to create pipe");
                     goto close_connection;
                 }
 
@@ -282,7 +282,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
 
                 int outpipefd[2];
                 if (pipe(outpipefd) < 0) {
-                    Logger::error("Failed to create output pipe");
+                    //Logger::error("Failed to create output pipe");
                     close(pipefd[0]);
                     goto close_connection;
                 }
@@ -304,10 +304,10 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
 
                     ssize_t sent = sendAll(toFd, decrypted, dec_len);  // 使用 sendAll 替代 write
                     if (sent < 0) {
-                        Logger::error("Send failed");
+                        //Logger::error("Send failed");
                         goto close_connection;
                     }
-                    Logger::debug("Sent " + Logger::toString(sent) + " decrypted bytes");
+                    //Logger::debug("Sent " + Logger::toString(sent) + " decrypted bytes");
                 }
 
                 // 从缓冲区移除已处理的数据
@@ -318,7 +318,7 @@ void forwardData(Connection* conn, int fromFd, int toFd, bool encrypt, int epoll
     }
 
 close_connection:
-    Logger::info("Closing connection");
+    //Logger::info("Closing connection");
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->clientFd, NULL);
     epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->proxyFd, NULL);
     close(conn->clientFd);
@@ -337,7 +337,7 @@ int main(int argc, char* argv[]) {
                     if (level >= LOG_ERROR && level <= LOG_DEBUG) {
                         Logger::setLevel(static_cast<LogLevel>(level));
                     } else {
-                        Logger::error("Invalid log level: " + std::to_string(level));
+                        //Logger::error("Invalid log level: " + std::to_string(level));
                         printUsage(argv[0]);
                         return 1;
                     }
@@ -352,7 +352,7 @@ int main(int argc, char* argv[]) {
                     if (port > 0 && port < 65536) {
                         proxy_port = port;
                     } else {
-                        Logger::error("Invalid port number: " + std::to_string(port));
+                        //Logger::error("Invalid port number: " + std::to_string(port));
                         printUsage(argv[0]);
                         return 1;
                     }
@@ -367,7 +367,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    Logger::info("Starting client with proxy server: " + proxy_ip + ":" + Logger::toString(proxy_port));
+    //Logger::info("Starting client with proxy server: " + proxy_ip + ":" + Logger::toString(proxy_port));
 
     int listenFd = socket(AF_INET, SOCK_STREAM, 0);
     int socket_opt = 1;
@@ -383,7 +383,7 @@ int main(int argc, char* argv[]) {
     listen(listenFd, SOMAXCONN);
     setNonBlocking(listenFd);
 
-    Logger::info("Client listening on port " + Logger::toString(CLIENT_PORT));
+    //Logger::info("Client listening on port " + Logger::toString(CLIENT_PORT));
 
     int epollFd = epoll_create1(0);
     struct epoll_event ev, events[MAX_EVENTS];
