@@ -487,10 +487,12 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
     uint8_t padding_data[BLOCK_SIZE];
     memset(padding_data, BLOCK_SIZE, BLOCK_SIZE);
     char buffer[BUFFER_SIZE];
+    int pipefd[2];
+    int outpipefd[2];
     while(true){
         if(encrypt){
             //Logger::debug("Encrypt data");
-            int pipefd[2];
+            
             ssize_t spliced = 0;
             ssize_t total_spliced = 0;
             ssize_t total_sent = 0;
@@ -536,7 +538,7 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
                 ssize_t written = write(pipefd[1], padding_data, BLOCK_SIZE);
                 //Logger::debug("Write " + Logger::toString(written) + " bytes");
                 total_spliced += written;
-                close(pipefd[1]);
+                // close(pipefd[1]);
             }else{
                 // 如果total_spliced不为BLOCK_SIZE的整数倍，说明数据不足，需要填充
                 size_t need_padding = BLOCK_SIZE - total_spliced % BLOCK_SIZE;
@@ -545,19 +547,19 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
                 ssize_t written = write(pipefd[1], need_padding_data, need_padding);
                 //Logger::debug("Write " + Logger::toString(written) + " bytes");
                 total_spliced += written;
-                close(pipefd[1]);
+                // close(pipefd[1]);
                 delete[] need_padding_data;
             }
 
-            int outpipefd[2];
+            
             if(pipe(outpipefd) < 0){
                 //Logger::error("Failed to create output pipe");
                 goto close_connection;
             }
 
             conn->crypto.encrypt(pipefd[0], outpipefd[1], total_spliced);
-            close(pipefd[0]);
-            close(outpipefd[1]);
+            // close(pipefd[0]);
+            // close(outpipefd[1]);
 
             //发送加密后的数据
             
@@ -596,10 +598,10 @@ void forwardDataNoCopy(Connection* conn, int fromFd, int toFd, bool encrypt, int
                 goto close_connection;
             }
 cleanup:
-            if(pipefd[0] != -1) close(pipefd[0]);
-            if(pipefd[1] != -1) close(pipefd[1]);
-            if(outpipefd[0] != -1) close(outpipefd[0]);
-            if(outpipefd[1] != -1) close(outpipefd[1]);
+            // if(pipefd[0] != -1) close(pipefd[0]);
+            // if(pipefd[1] != -1) close(pipefd[1]);
+            // if(outpipefd[0] != -1) close(outpipefd[0]);
+            // if(outpipefd[1] != -1) close(outpipefd[1]);
             // if(spliced < 0 || total_spliced == 0) goto close_connection;
         }else{
             //当前存在问题
@@ -808,9 +810,9 @@ void workerProcess(int listenFd) {
 
                 Connection* conn = it->second;
                 if (currentFd == conn->clientFd) {
-                    forwardData(conn, currentFd, conn->serverFd, false, epollFd);
+                    forwardDataNoCopy(conn, currentFd, conn->serverFd, false, epollFd);
                 } else {
-                    forwardData(conn, currentFd, conn->clientFd, true, epollFd);
+                    forwardDataNoCopy(conn, currentFd, conn->clientFd, true, epollFd);
                 }
             }
         }
